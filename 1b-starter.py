@@ -21,7 +21,7 @@ class Output:
 
     # Serialize the output to bytes
     def to_bytes(self) -> bytes:
-        return self.value.to_bytes(4, 'big', False) + bytes.fromhex(self.pub_key)
+        return self.value.to_bytes(4, 'big', signed=False) + bytes.fromhex(self.pub_key)
 
 class Input:
     """
@@ -51,10 +51,12 @@ class Transaction:
 
         self.update_number()
 
+    def get_inputs(self) -> List[Input]:
+        return self.inputs
+
     # Set the transaction number to be SHA256 of self.to_bytes().
     def update_number(self):
-        # TODO
-        pass
+        return hashlib.sha256(self.to_bytes()).digest()
 
     # Get the bytes of the transaction before signatures; signers need to sign
     # this value!
@@ -97,8 +99,14 @@ class Block:
     # constant. Record the nonce as a hex-encoded string (bytearray.hex(), see
     # Transaction.to_bytes() for an example).
     def mine(self):
-        # TODO
-        pass 
+        self.nonce = "0"  # hex-encoded string starting at 0
+        while True:
+            if int(self.hash(), 16) < DIFFICULTY:
+                break
+
+            self.nonce = f"{chr(int(self.nonce, 16) + 1)}"
+
+        return self.nonce
     
     # Hash the block.
     def hash(self) -> str:
@@ -119,6 +127,9 @@ class Blockchain:
     def __init__(self, chain: List[Block], utxos: List[str]):
         self.chain = chain
         self.utxos = utxos
+
+    def __len__(self):
+        return len(self.chain)
     
     def append(self, block: Block) -> bool:
         # TODO
@@ -130,7 +141,7 @@ class Node:
     """
     def __init__(self):
         # We will not access this field, you are free change it if needed.
-        self.chains = []
+        self.chains: List[Blockchain] = []
 
     # Create a new chain with the given genesis block. The autograder will give
     # you the genesis block.
@@ -144,15 +155,65 @@ class Node:
         # TODO
         pass
 
+    def get_longest_chain(self):
+        return max(self.chains, key=lambda blockchain: len(blockchain))
+
+
+    def check_double_spend(self, tx: Transaction, blockchain: Blockchain):
+        for input in tx.get_inputs():
+            if input.number not in blockchain.utxos:
+                return False
+        return True
+    
+
+    def verify_tx(self, tx: Transaction, blockchain: Blockchain):
+        pass
+
+    def verify_tx_num_exists(self, inputs: List[Input], blockchain: Blockchain):
+        for input in inputs:
+            found_tx_num_match = False
+            for block in blockchain.chain:
+                if input.number == block.tx.update_number():
+                    found_tx_num_match = True
+                    break
+            
+            if not found_tx_num_match:
+                return False
+        
+        return True
+
+
     # Build a block on the longest chain you are currently tracking. If the
     # transaction is invalid (e.g. double spend), return None.
     def build_block(self, tx: Transaction) -> Optional[Block]:
         # TODO
+
+        # Get longest blockchain
+        blockchain: Blockchain = self.get_longest_chain()
+
+
+
+        # Create a block object
+
+        # mine the block
+        # find longest chain and append this block to it
         pass
 
 # Build and sign a transaction with the given inputs and outputs. If it is
 # impossible to build a valid transaction given the inputs and outputs, you
 # should return None. Do not verify that the inputs are unspent.
 def build_transaction(inputs: List[Input], outputs: List[Output], signing_key: SigningKey) -> Optional[Transaction]:
-    # TODO
+    input_sum = sum([input.output.value for input in inputs])
+    output_sum = sum([output.value for output in outputs])
+    if output_sum > input_sum:
+        return None
+
+    # Check public keys of inputs match...
+    for i in range(len(inputs) - 1):
+        if inputs[i].output.pub_key != inputs[i+1].output.pub_key:
+            return None
+        
+    
+
+
     pass
