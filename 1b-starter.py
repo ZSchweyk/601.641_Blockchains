@@ -1,5 +1,5 @@
 import hashlib
-from typing import List, Optional
+from typing import List, Tuple, Optional
 from nacl.signing import SigningKey, VerifyKey
 
 DIFFICULTY = 0x07FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
@@ -53,10 +53,13 @@ class Transaction:
 
     def get_inputs(self) -> List[Input]:
         return self.inputs
+    
+    def get_outputs(self) -> List[Output]:
+        return self.outputs
 
     # Set the transaction number to be SHA256 of self.to_bytes().
     def update_number(self):
-        return hashlib.sha256(self.to_bytes()).digest()
+        self.number = hashlib.sha256(self.to_bytes()).digest()
 
     # Get the bytes of the transaction before signatures; signers need to sign
     # this value!
@@ -169,11 +172,17 @@ class Node:
     def verify_tx(self, tx: Transaction, blockchain: Blockchain):
         pass
 
-    def verify_tx_num_exists(self, inputs: List[Input], blockchain: Blockchain):
+    def verify_tx_num_and_output_exist(self, inputs: List[Input], blockchain: Blockchain):
         for input in inputs:
             found_tx_num_match = False
             for block in blockchain.chain:
-                if input.number == block.tx.update_number():
+                if input.number == block.tx.number: # Check if a tx number on the blockchain matches the number field of input
+                    input_is_an_output: bool = bool(sum([
+                        input.output.value == trans_output.value and input.output.pub_key == trans_output.pub_key
+                        for trans_output in block.tx.get_outputs()
+                    ]))
+                    if not input_is_an_output:
+                        return False
                     found_tx_num_match = True
                     break
             
@@ -203,6 +212,8 @@ class Node:
 # impossible to build a valid transaction given the inputs and outputs, you
 # should return None. Do not verify that the inputs are unspent.
 def build_transaction(inputs: List[Input], outputs: List[Output], signing_key: SigningKey) -> Optional[Transaction]:
+    
+    # Check that the sum of the outputs do not exceed the sum of the inputs...
     input_sum = sum([input.output.value for input in inputs])
     output_sum = sum([output.value for output in outputs])
     if output_sum > input_sum:
@@ -212,8 +223,5 @@ def build_transaction(inputs: List[Input], outputs: List[Output], signing_key: S
     for i in range(len(inputs) - 1):
         if inputs[i].output.pub_key != inputs[i+1].output.pub_key:
             return None
-        
     
-
-
-    pass
+    # Need 
