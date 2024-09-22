@@ -1,6 +1,8 @@
 import hashlib
 from typing import List, Tuple, Optional
 from nacl.signing import SigningKey, VerifyKey
+from nacl.encoding import HexEncoder
+from copy import deepcopy
 
 DIFFICULTY = 0x07FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
 
@@ -44,7 +46,7 @@ class Transaction:
     represents the bytes of the signature.
     """
 
-    def __init__(self, inputs: List[Input], outputs: List[Output], sig_hex: str):
+    def __init__(self, inputs: List[Input], outputs: List[Output], sig_hex: Optional[str]):
         self.inputs = inputs
         self.outputs = outputs
         self.sig_hex = sig_hex
@@ -104,11 +106,14 @@ class Block:
     def mine(self):
         self.nonce = "0"  # hex-encoded string starting at 0
         while True:
-            if int(self.hash(), 16) < DIFFICULTY:
+            hash_hex_digest = self.hash()
+            if int(hash_hex_digest, 16) < DIFFICULTY:
+                self.pow = int.from_bytes(bytes.fromhex(hash_hex_digest), "big")
                 break
 
             self.nonce = f"{chr(int(self.nonce, 16) + 1)}"
 
+        
         return self.nonce
     
     # Hash the block.
@@ -127,16 +132,34 @@ class Blockchain:
     will not call this class.
     """
     
-    def __init__(self, chain: List[Block], utxos: List[str]):
-        self.chain = chain
-        self.utxos = utxos
-
+    def __init__(self, chain: List[Block]):
+        self.chain = []
+        self.utxos = []
+        for block in chain:
+            self.append(block)
+        
     def __len__(self):
         return len(self.chain)
     
+    def get_blocks(self):
+        return self.chain
+    
+    def create_new_blockchain(self, block: Block):        
+        repeated_blocks = deepcopy(self.chain)[:self.chain.index(block)+1]
+        return Blockchain(repeated_blocks)
+    
+    def get_last_block_hash(self) -> str:
+        return self.chain[-1].hash()
+    
     def append(self, block: Block) -> bool:
-        # TODO
-        pass
+        self.chain.append(block)
+        for tx_input in block.tx.get_inputs():
+            # remove from utxos
+            self.utxos.remove(tx_input.output)
+            
+        for tx_output in block.tx.get_outputs():
+            # add to utxos
+            self.utxos.append(tx_output)
 
 class Node:
     """
@@ -149,28 +172,45 @@ class Node:
     # Create a new chain with the given genesis block. The autograder will give
     # you the genesis block.
     def new_chain(self, genesis: Block):
-        # TODO
-        pass
+        self.chains.append(Blockchain([genesis]))
 
     # Attempt to append a block broadcast on the network; return true if it is
     # possible to add (e.g. could be a fork). Return false otherwise.
     def append(self, block: Block) -> bool:
-        # TODO
-        pass
+        if block.pow != int.from_bytes(bytes.fromhex(block.hash()), "big"):
+            return False
+        
+        for bc in self.chains:
+            for b in bc.get_blocks():
+                if block.prev == b.hash():
+                    if b.hash() == bc.get_last_block_hash():  # b is last block in chain
+                        if self.verify_tx(block.tx, bc):
+                            bc.append(block)
+                            return True
+                        return False
+                    else:  # b is in middle of chain
+                        # fork
+                        new_bc: Blockchain =  bc.create_new_blockchain(b)  # create a new Blockchain object from those blocks 
+                        if self.verify_tx(block.tx, bc):
+                            new_bc.append(block)  # append `block` to that new Blockchain object
+                            self.chains.append(new_bc)  # append new blockchain to chains
+                            return True
+                        return False
+        
+        return False
 
     def get_longest_chain(self):
         return max(self.chains, key=lambda blockchain: len(blockchain))
 
+
+    def verify_tx(self, tx: Transaction, bc: Blockchain):
+        return self.check_double_spend(tx, bc) and self.verify_tx_num_and_output_exist(tx.get_inputs(), bc)
 
     def check_double_spend(self, tx: Transaction, blockchain: Blockchain):
         for input in tx.get_inputs():
             if input.number not in blockchain.utxos:
                 return False
         return True
-    
-
-    def verify_tx(self, tx: Transaction, blockchain: Blockchain):
-        pass
 
     def verify_tx_num_and_output_exist(self, inputs: List[Input], blockchain: Blockchain):
         for input in inputs:
@@ -195,18 +235,19 @@ class Node:
     # Build a block on the longest chain you are currently tracking. If the
     # transaction is invalid (e.g. double spend), return None.
     def build_block(self, tx: Transaction) -> Optional[Block]:
-        # TODO
-
         # Get longest blockchain
         blockchain: Blockchain = self.get_longest_chain()
 
-
+        if not self.verify_tx(tx, blockchain):
+            return None
 
         # Create a block object
+        block = Block(blockchain.get_last_block_hash(), tx, None)
 
         # mine the block
-        # find longest chain and append this block to it
-        pass
+        block.mine()
+        blockchain.append(block)
+        return block
 
 # Build and sign a transaction with the given inputs and outputs. If it is
 # impossible to build a valid transaction given the inputs and outputs, you
@@ -224,4 +265,8 @@ def build_transaction(inputs: List[Input], outputs: List[Output], signing_key: S
         if inputs[i].output.pub_key != inputs[i+1].output.pub_key:
             return None
     
-    # Need 
+    tx = Transaction(inputs, outputs, None)
+    signature = signing_key.sign(tx.bytes_to_sign())
+    tx.sig_hex = bytes(signature).hex()
+    return tx
+    
