@@ -141,7 +141,7 @@ class Blockchain:
     def __len__(self):
         return len(self.chain)
     
-    def get_blocks(self):
+    def get_blocks(self) -> List[Block]:
         return self.chain
     
     def create_new_blockchain(self, block: Block):        
@@ -215,7 +215,7 @@ class Node:
     def verify_tx_num_and_output_exist(self, inputs: List[Input], blockchain: Blockchain):
         for input in inputs:
             found_tx_num_match = False
-            for block in blockchain.chain:
+            for block in blockchain.get_blocks():
                 if input.number == block.tx.number: # Check if a tx number on the blockchain matches the number field of input
                     input_is_an_output: bool = bool(sum([
                         input.output.value == trans_output.value and input.output.pub_key == trans_output.pub_key
@@ -265,8 +265,16 @@ def build_transaction(inputs: List[Input], outputs: List[Output], signing_key: S
         if inputs[i].output.pub_key != inputs[i+1].output.pub_key:
             return None
     
-    tx = Transaction(inputs, outputs, None)
-    signature = signing_key.sign(tx.bytes_to_sign())
-    tx.sig_hex = bytes(signature).hex()
+
+
+    m = b''
+    for i in inputs:
+        m += i.to_bytes()
+    
+    for o in outputs:
+        m += o.to_bytes()
+
+    signature = signing_key.sign(m.hex())
+    tx = Transaction(inputs, outputs, signature.signature.hex())
     return tx
     
