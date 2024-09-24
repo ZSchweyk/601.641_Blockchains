@@ -51,7 +51,8 @@ class Transaction:
         self.outputs = outputs
         self.sig_hex = sig_hex
 
-        self.update_number()
+        if sig_hex is not None:
+            self.update_number()
 
     def get_inputs(self) -> List[Input]:
         return self.inputs
@@ -267,14 +268,14 @@ def build_transaction(inputs: List[Input], outputs: List[Output], signing_key: S
     
 
 
-    m = b''
-    for i in inputs:
-        m += i.to_bytes()
+    # m = b''
+    # for i in inputs:
+    #     m += i.to_bytes()
     
-    for o in outputs:
-        m += o.to_bytes()
+    # for o in outputs:
+    #     m += o.to_bytes()
 
-    signature = signing_key.sign(m.hex())
-    tx = Transaction(inputs, outputs, signature.signature.hex())
+    # signature = signing_key.sign(m.hex())
+    tx = Transaction(inputs, outputs, None)
     return tx
     
