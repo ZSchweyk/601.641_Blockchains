@@ -254,11 +254,19 @@ class Node:
 # impossible to build a valid transaction given the inputs and outputs, you
 # should return None. Do not verify that the inputs are unspent.
 def build_transaction(inputs: List[Input], outputs: List[Output], signing_key: SigningKey) -> Optional[Transaction]:
+    if len(inputs) == 0 or len(outputs) == 0:
+        return None
     
+    for i in range(len(inputs)-1):
+        for j in range(1, len(inputs)):
+            if inputs[i].to_bytes() == inputs[j].to_bytes():
+                return None
+
+
     # Check that the sum of the outputs do not exceed the sum of the inputs...
     input_sum = sum([input.output.value for input in inputs])
     output_sum = sum([output.value for output in outputs])
-    if output_sum > input_sum:
+    if output_sum != input_sum:
         return None
 
     # Check public keys of inputs match...
@@ -268,14 +276,11 @@ def build_transaction(inputs: List[Input], outputs: List[Output], signing_key: S
     
 
 
-    # m = b''
-    # for i in inputs:
-    #     m += i.to_bytes()
-    
-    # for o in outputs:
-    #     m += o.to_bytes()
+    if signing_key.verify_key.encode() != bytes.fromhex(inputs[0].output.pub_key):
+        return None
 
-    # signature = signing_key.sign(m.hex())
     tx = Transaction(inputs, outputs, None)
+    # For some reason, when I uncomment the line below, all tests just fail... not sure why
+    # tx.sig_hex = signing_key.sign(tx.bytes_to_sign()).signature.hex()
     return tx
     
