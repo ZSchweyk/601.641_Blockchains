@@ -1,6 +1,7 @@
 import hashlib
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Union
 from nacl.signing import SigningKey, VerifyKey
+from nacl.exceptions import BadSignatureError
 from nacl.encoding import HexEncoder
 from copy import deepcopy
 
@@ -51,8 +52,7 @@ class Transaction:
         self.outputs = outputs
         self.sig_hex = sig_hex
 
-        if sig_hex is not None:
-            self.update_number()
+        self.update_number()
 
     def get_inputs(self) -> List[Input]:
         return self.inputs
@@ -62,7 +62,11 @@ class Transaction:
 
     # Set the transaction number to be SHA256 of self.to_bytes().
     def update_number(self):
-        self.number = hashlib.sha256(self.to_bytes()).digest()
+        self.number = hashlib.sha256(bytes.fromhex(self.to_bytes())).hexdigest()
+
+    def update_sig(self, sig_hex):
+        self.sig_hex = sig_hex
+        self.update_number()
 
     # Get the bytes of the transaction before signatures; signers need to sign
     # this value!
@@ -100,21 +104,23 @@ class Block:
         self.tx = tx
         self.nonce = nonce
         self.prev = prev
+        self.pow = self.hash()
 
     # Find a valid nonce such that the hash below is less than the DIFFICULTY
     # constant. Record the nonce as a hex-encoded string (bytearray.hex(), see
     # Transaction.to_bytes() for an example).
-    def mine(self):
-        self.nonce = "0"  # hex-encoded string starting at 0
+    def mine(self):        
+        self.nonce = "00" # hex-encoded string starting at 0
         while True:
             hash_hex_digest = self.hash()
             if int(hash_hex_digest, 16) < DIFFICULTY:
-                self.pow = int.from_bytes(bytes.fromhex(hash_hex_digest), "big")
+                self.pow = hash_hex_digest
                 break
 
-            self.nonce = f"{chr(int(self.nonce, 16) + 1)}"
+            self.nonce = hex(int(self.nonce, 16) + 1)[2:]
+            if len(self.nonce) % 2 != 0:
+                self.nonce = "0" + self.nonce
 
-        
         return self.nonce
     
     # Hash the block.
@@ -156,11 +162,26 @@ class Blockchain:
         self.chain.append(block)
         for tx_input in block.tx.get_inputs():
             # remove from utxos
-            self.utxos.remove(tx_input.output)
-            
+            try:
+                self.utxos.remove(
+                    {
+                        "output_bytes": tx_input.output.to_bytes(),
+                        "tx_num": block.tx.number.encode()
+                    }
+                )
+            except ValueError:
+                # Input output could not be removed from utxo list...
+                # Genesis?
+                pass
+        
         for tx_output in block.tx.get_outputs():
             # add to utxos
-            self.utxos.append(tx_output)
+            self.utxos.append(
+                {
+                    "output_bytes": tx_output.to_bytes(),
+                    "tx_num": block.tx.number.encode()
+                }
+            )
 
 class Node:
     """
@@ -178,7 +199,7 @@ class Node:
     # Attempt to append a block broadcast on the network; return true if it is
     # possible to add (e.g. could be a fork). Return false otherwise.
     def append(self, block: Block) -> bool:
-        if block.pow != int.from_bytes(bytes.fromhex(block.hash()), "big"):
+        if int.from_bytes(bytes.fromhex(block.hash()), "big") >= DIFFICULTY:
             return False
         
         for bc in self.chains:
@@ -192,7 +213,7 @@ class Node:
                     else:  # b is in middle of chain
                         # fork
                         new_bc: Blockchain =  bc.create_new_blockchain(b)  # create a new Blockchain object from those blocks 
-                        if self.verify_tx(block.tx, bc):
+                        if self.verify_tx(block.tx, new_bc):
                             new_bc.append(block)  # append `block` to that new Blockchain object
                             self.chains.append(new_bc)  # append new blockchain to chains
                             return True
@@ -203,15 +224,58 @@ class Node:
     def get_longest_chain(self):
         return max(self.chains, key=lambda blockchain: len(blockchain))
 
+    @staticmethod
+    def are_tx_fields_valid(inputs: List[Input], outputs: List[Output]):
+        if len(inputs) == 0 or len(outputs) == 0:
+            return False
+    
+        for i in range(len(inputs)-1):
+            for j in range(1, len(inputs)):
+                if inputs[i].to_bytes() == inputs[j].to_bytes():
+                    return False
+
+        # Check that the sum of the outputs do not exceed the sum of the inputs...
+        input_sum = sum([input.output.value for input in inputs])
+        output_sum = sum([output.value for output in outputs])
+        if output_sum != input_sum:
+            return False
+
+        # Check public keys of inputs match...
+        for i in range(len(inputs) - 1):
+            if inputs[i].output.pub_key != inputs[i+1].output.pub_key:
+                return False
+        
+        return True
+    
+    @staticmethod
+    def verify_tx_signature(pub_key: bytes, tx: Transaction, signature: bytes):
+        verify_obj = VerifyKey(pub_key)
+        try:
+            verify_obj.verify(bytes.fromhex(tx.bytes_to_sign()), signature)
+            return True
+        except BadSignatureError:
+            return False
 
     def verify_tx(self, tx: Transaction, bc: Blockchain):
-        return self.check_double_spend(tx, bc) and self.verify_tx_num_and_output_exist(tx.get_inputs(), bc)
+        return \
+            Node.are_tx_fields_valid(tx.get_inputs(), tx.get_outputs()) \
+            and Node.verify_tx_signature(bytes.fromhex(tx.get_inputs()[0].output.pub_key), tx, bytes.fromhex(tx.sig_hex)) \
+            and self.verify_tx_num_and_output_exist(tx.get_inputs(), bc) \
+            # and not self.has_a_double_spend(tx, bc)
+            
+            
 
-    def check_double_spend(self, tx: Transaction, blockchain: Blockchain):
+    def has_a_double_spend(self, tx: Transaction, blockchain: Blockchain):
+        # Can't compare dictionaries with the `in` keyword since that'll compare memory addresses
+        # Need to compare the actual values of the utxo
         for input in tx.get_inputs():
-            if input.number not in blockchain.utxos:
-                return False
-        return True
+            output_of_input = {"output_bytes": input.output.to_bytes(), "tx_num": tx.number.encode()}
+            is_unspent = sum([output_of_input == utxo for utxo in blockchain.utxos])
+            if not is_unspent:  # output_of_input has already been spent
+                print(f"{input} has already been spent")
+                return True
+            
+        return False
 
     def verify_tx_num_and_output_exist(self, inputs: List[Input], blockchain: Blockchain):
         for input in inputs:
@@ -243,10 +307,11 @@ class Node:
             return None
 
         # Create a block object
-        block = Block(blockchain.get_last_block_hash(), tx, None)
+        block = Block(blockchain.get_last_block_hash(), tx, "00")
 
         # mine the block
         block.mine()
+        # print("block mined with nonce", block.nonce)
         blockchain.append(block)
         return block
 
@@ -254,33 +319,11 @@ class Node:
 # impossible to build a valid transaction given the inputs and outputs, you
 # should return None. Do not verify that the inputs are unspent.
 def build_transaction(inputs: List[Input], outputs: List[Output], signing_key: SigningKey) -> Optional[Transaction]:
-    if len(inputs) == 0 or len(outputs) == 0:
-        return None
-    
-    for i in range(len(inputs)-1):
-        for j in range(1, len(inputs)):
-            if inputs[i].to_bytes() == inputs[j].to_bytes():
-                return None
-
-
-    # Check that the sum of the outputs do not exceed the sum of the inputs...
-    input_sum = sum([input.output.value for input in inputs])
-    output_sum = sum([output.value for output in outputs])
-    if output_sum != input_sum:
-        return None
-
-    # Check public keys of inputs match...
-    for i in range(len(inputs) - 1):
-        if inputs[i].output.pub_key != inputs[i+1].output.pub_key:
-            return None
-    
-
-
-    if signing_key.verify_key.encode() != bytes.fromhex(inputs[0].output.pub_key):
-        return None
-
-    tx = Transaction(inputs, outputs, None)
+    tx = Transaction(inputs, outputs, "")
     # For some reason, when I uncomment the line below, all tests just fail... not sure why
-    # tx.sig_hex = signing_key.sign(tx.bytes_to_sign()).signature.hex()
+    tx.update_sig(signing_key.sign(bytes.fromhex(tx.bytes_to_sign())).signature.hex())
+
+    if not Node.are_tx_fields_valid(inputs, outputs) or not Node.verify_tx_signature(bytes.fromhex(inputs[0].output.pub_key), tx, bytes.fromhex(tx.sig_hex)):
+        return None
     return tx
     
