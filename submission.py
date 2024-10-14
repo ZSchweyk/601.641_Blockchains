@@ -263,7 +263,6 @@ class Node:
             and self.verify_tx_num_and_output_exist(tx.get_inputs(), bc) \
             # and not self.has_a_double_spend(tx, bc)
             
-            
 
     def has_a_double_spend(self, tx: Transaction, blockchain: Blockchain):
         # Can't compare dictionaries with the `in` keyword since that'll compare memory addresses
@@ -322,7 +321,7 @@ def build_transaction(inputs: List[Input], outputs: List[Output], signing_key: S
     tx = Transaction(inputs, outputs, "")
     # For some reason, when I uncomment the line below, all tests just fail... not sure why
     tx.update_sig(signing_key.sign(bytes.fromhex(tx.bytes_to_sign())).signature.hex())
-
+    
     if not Node.are_tx_fields_valid(inputs, outputs) or not Node.verify_tx_signature(bytes.fromhex(inputs[0].output.pub_key), tx, bytes.fromhex(tx.sig_hex)):
         return None
     return tx
